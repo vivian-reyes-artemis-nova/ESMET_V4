@@ -1,0 +1,199 @@
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_AHTX0.h>
+#include <Adafruit_BMP085_U.h>
+#include <Adafruit_BME280.h>
+#include <DHT.h>
+
+// === Pines I2C personalizados ===
+#define SDA_PIN 9
+#define SCL_PIN 8
+
+// === Sensor DHT11 ===
+#define DHTPIN 10
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// === Objetos de sensores ===
+Adafruit_AHTX0 aht;
+Adafruit_BMP085_Unified bmp;
+Adafruit_BME280 bme;
+
+// === Variables para verificar sensores ===
+bool ahtOk = false;
+bool bmpOk = false;
+bool bmeOk = false;
+bool dhtOk = false;
+
+// === Sensor Hall  ===
+const int sensorPin = 4;
+volatile unsigned long ultimaVuelta = 0;
+volatile float tiempoEntreVueltas = 0.0;
+const unsigned long tiempoRebote = 200;
+
+// === Variables promedio ===
+float sumaTemp = 0, sumaHum = 0, sumaPres = 0;
+int cuentaTemp = 0, cuentaHum = 0, cuentaPres = 0;
+
+// === Interrupción para contar pulsos del anemómetro ===
+void IRAM_ATTR contarVuelta() {
+  unsigned long tiempoActual = millis();
+  if (tiempoActual - ultimaVuelta > tiempoRebote) {
+    tiempoEntreVueltas = (tiempoActual - ultimaVuelta) / 1000.0; // segundos
+    ultimaVuelta = tiempoActual;
+  }
+}
+
+void inicializarSensores() {
+  ahtOk = aht.begin();
+  bmpOk = bmp.begin();
+  bmeOk = bme.begin(0x76);
+  dht.begin();
+
+  delay(100);
+  float temp = dht.readTemperature();
+  dhtOk = !isnan(temp);
+}
+
+void verificarSensores() {
+  Serial.println("\nEstado de sensores:");
+  if (!ahtOk) Serial.println("AHT10 no detectado");
+  if (!bmpOk) Serial.println("BMP180 no detectado");
+  if (!bmeOk) Serial.println("BME280 no detectado");
+  if (!dhtOk) Serial.println("DHT11 no detectado");
+}
+
+void leerAHT10() {
+  if (!ahtOk) return;
+  sensors_event_t humedad, temperatura;
+  if (aht.getEvent(&humedad, &temperatura)) {
+    Serial.print("[AHT10]    Temp: ");
+    Serial.print(temperatura.temperature, 2);
+    Serial.print("°C | Hum: ");
+    Serial.print(humedad.relative_humidity, 2);
+    Serial.println("%");
+
+    sumaTemp += temperatura.temperature;
+    sumaHum += humedad.relative_humidity;
+    cuentaTemp++;
+    cuentaHum++;
+  }
+}
+
+void leerDHT11() {
+  if (!dhtOk) return;
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+  if (!isnan(temp) && !isnan(hum)) {
+    Serial.print("[DHT11]    Temp: ");
+    Serial.print(temp, 2);
+    Serial.print("°C | Hum: ");
+    Serial.print(hum, 2);
+    Serial.println("%");
+
+    sumaTemp += temp;
+    sumaHum += hum;
+    cuentaTemp++;
+    cuentaHum++;
+  }
+}
+
+void leerBMP180() {
+  if (!bmpOk) return;
+  float temp, presion;
+  bmp.getTemperature(&temp);
+  bmp.getPressure(&presion);
+  Serial.print("[BMP180]   Temp: ");
+  Serial.print(temp, 2);
+  Serial.print("°C |             | Presión: ");
+  Serial.print(presion / 100.0, 2);
+  Serial.println(" mb");
+
+  sumaTemp += temp;
+  sumaPres += presion / 100.0;
+  cuentaTemp++;
+  cuentaPres++;
+}
+
+void leerBME280() {
+  if (!bmeOk) return;
+  float temp = bme.readTemperature();
+  float hum = bme.readHumidity();
+  float pres = bme.readPressure() / 100.0F;
+
+  Serial.print("[BME280]   Temp: ");
+  Serial.print(temp, 2);
+  Serial.print("°C | Hum: ");
+  Serial.print(hum, 2);
+  Serial.print("% | Presión: ");
+  Serial.print(pres, 2);
+  Serial.println(" mb");
+
+  sumaTemp += temp;
+  sumaHum += hum;
+  sumaPres += pres;
+  cuentaTemp++;
+  cuentaHum++;
+  cuentaPres++;
+}
+
+void mostrarPromedio() {
+  if (cuentaTemp > 0) {
+    Serial.print("\n[Promedio] Temp: ");
+    Serial.print(sumaTemp / cuentaTemp, 2);
+    Serial.print("°C | Hum: ");
+    Serial.print(cuentaHum > 0 ? (sumaHum / cuentaHum) : 0, 2);
+    Serial.print("% | Presión: ");
+    Serial.print(cuentaPres > 0 ? (sumaPres / cuentaPres) : 0, 2);
+    Serial.println(" mb\n");
+  }
+
+  // Reiniciar sumas
+  sumaTemp = sumaHum = sumaPres = 0;
+  cuentaTemp = cuentaHum = cuentaPres = 0;
+}
+
+void mostrarVelocidadViento() {
+  Serial.println("Anemómetro:");
+  if (tiempoEntreVueltas > 0) {
+    float frecuencia = 1.0 / tiempoEntreVueltas; // Hz
+    const float constante = 2.4; // km/h por Hz 
+    float velocidad_kmh = frecuencia * constante;
+    float velocidad_ms = velocidad_kmh * 0.27778;
+
+    Serial.print("Velocidad del viento: ");
+    Serial.print(velocidad_ms, 2);
+    Serial.print(" m/s - ");
+    Serial.print(velocidad_kmh, 2);
+    Serial.println(" km/h");
+    Serial.print("Tiempo entre vueltas: ");
+    Serial.print(tiempoEntreVueltas, 2);
+    Serial.println(" s\n");
+  } else {
+    Serial.println("Esperando datos para calcular velocidad...\n");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  delay(1000);
+
+  inicializarSensores();
+  verificarSensores();
+
+  pinMode(sensorPin, INPUT);
+  attachInterrupt(digitalPinToInterrupt(sensorPin), contarVuelta, FALLING);
+}
+
+void loop() {
+  leerAHT10();
+  leerDHT11();
+  leerBMP180();
+  leerBME280();
+
+  mostrarPromedio();
+  mostrarVelocidadViento();
+
+  delay(5000);
+}
